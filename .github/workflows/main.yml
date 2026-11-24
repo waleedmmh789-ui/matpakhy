@@ -11,34 +11,71 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '17'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
-    - name: Set up Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: 'stable'
-        cache: true
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-    - name: Install dependencies
-      run: flutter pub get
+      - name: Cache Gradle and NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            /usr/local/lib/android/sdk/ndk
+          key: ${{ runner.os }}-gradle-ndk-${{ hashFiles('**/gradle-wrapper.properties', 'android/app/build.gradle*', '**/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-ndk-
 
-    - name: Disable Lint Check (Fix for LintDetectorError)
-      run: |
-        # هذا الأمر يعدل ملف build.gradle تلقائياً لتعطيل فحص Lint
-        sed -i '/^android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' android/app/build.gradle
+      - name: Install dependencies
+        run: flutter pub get
 
-    - name: Build APK
-      run: flutter build apk --release
+      - name: Disable Lint Check (Fix for LintDetectorError)
+        run: |
+          python3 - << 'EOF'
+          from pathlib import Path
+          import re
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-apk
-        path: build/app/outputs/flutter-apk/app-release.apk
+          for target in [Path("android/app/build.gradle.kts"), Path("android/app/build.gradle")]:
+              if target.exists():
+                  content = target.read_text(encoding="utf-8")
+                  if target.suffix == ".kts":
+                      lint_block = """
+          lint {
+              checkReleaseBuilds = false
+              abortOnError = false
+          }
+          """
+                      if "lint {" not in content:
+                          content, _ = re.subn(r"(android\s*\{)", r"\1" + lint_block, content, count=1)
+                  else:
+                      lint_block = """
+          lintOptions {
+              checkReleaseBuilds false
+              abortOnError false
+          }
+          """
+                      if "lintOptions {" not in content:
+                          content, _ = re.subn(r"(android\s*\{)", r"\1" + lint_block, content, count=1)
+                  target.write_text(content, encoding="utf-8")
+                  print(f"Updated {target}")
+          EOF
+
+      - name: Build APK
+        run: flutter build apk --release -Pandroid.lint.checkReleaseBuilds=false
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
