@@ -1,184 +1,146 @@
-name: Build Android (APK + AAB)
+Skip to content
+waleedmmh789-ui
+matpakhy
+Repository navigation
+Code
+Issues
+Pull requests
+Actions
+Projects
+Wiki
+Security and quality
+Insights
+Settings
+Build Android (APK + AAB)
+Update main.yml #32
+All jobs
+Run details
+Annotations
+1 error and 6 warnings
+build
+failed now in 6m 3s
+Search logs
+3s
+4s
+0s
+0s
+30s
+0s
+0s
+6s
+3s
+1s
+2s
+5m 12s
+Run for i in 1 2 3; do
+Upgrading gradle.properties
+Upgrading gradle.properties
+Running Gradle task 'assembleRelease'...                        
+Both build.gradle and build.gradle.kts exist, so
+build.gradle.kts is ignored. This is likely a mistake.
 
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  workflow_dispatch:
+FAILURE: Build failed with an exception.
 
-permissions:
-  contents: write
+* Where:
+Build file '/home/runner/work/matpakhy/matpakhy/_project/merged/android/app/build.gradle' line: 5
 
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+* What went wrong:
+An exception occurred applying plugin request [id: 'dev.flutter.flutter-gradle-plugin']
+> Failed to apply plugin 'dev.flutter.flutter-gradle-plugin'.
+   > Error: Your project's Gradle version (8.11.1) is lower than Flutter's minimum supported version of 9.3.1. Please upgrade your Gradle version. 
+     Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
+     Potential fix: Your project's gradle version is typically defined in the gradle wrapper file. By default, this can be found at /home/runner/work/matpakhy/matpakhy/_project/merged/android/gradle/wrapper/gradle-wrapper.properties. 
+     For more information, see https://docs.gradle.org/current/userguide/gradle_wrapper.html.
 
-      # ---------- 1) تحديد المشروع وفكّه (بدون أي تعارض بين الملفات المرفوعة) ----------
-      - name: Locate and extract project
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f pubspec.yaml ]; then
-            ROOT="$GITHUB_WORKSPACE"
-          else
-            ZIP=""
-            if [ -f matbakhy-final.zip ]; then
-              ZIP="matbakhy-final.zip"
-            else
-              ZIP="$(ls -1 matbakhy_merged*.zip 2>/dev/null | sort | tail -n1 || true)"
-            fi
-            if [ -z "$ZIP" ]; then
-              echo "::error::لم أجد matbakhy-final.zip في جذر المستودع. ارفعه (واحذف ملفات zip القديمة)."
-              exit 1
-            fi
-            echo "Using $ZIP"
-            rm -rf "$GITHUB_WORKSPACE/_project"
-            mkdir -p "$GITHUB_WORKSPACE/_project"
-            unzip -q -o "$ZIP" -d "$GITHUB_WORKSPACE/_project"
-            PUB="$(find "$GITHUB_WORKSPACE/_project" -maxdepth 3 -name pubspec.yaml -not -path '*/.*' | head -n1)"
-            if [ -z "$PUB" ]; then
-              echo "::error::لا يوجد pubspec.yaml داخل $ZIP"
-              exit 1
-            fi
-            ROOT="$(dirname "$PUB")"
-          fi
-          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          echo "Project root: $ROOT"
-          ls "$ROOT"
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
+BUILD FAILED in 1m 8s
+Running Gradle task 'assembleRelease'...                           68.8s
+Gradle task assembleRelease failed with exit code 1
+Warning: Attempt 1 failed, retrying...
+Running Gradle task 'assembleRelease'...                        
+Both build.gradle and build.gradle.kts exist, so
+build.gradle.kts is ignored. This is likely a mistake.
 
-      # ---------- 2) إصلاح خطأ 429: مرآة Maven + إعادة المحاولة + كاش ----------
-      - name: Configure Gradle (mirror + retries)
-        shell: bash
-        run: |
-          mkdir -p "$HOME/.gradle/init.d"
-          cat > "$HOME/.gradle/init.d/mirror.gradle" <<'GRADLE'
-          def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
-          gradle.beforeSettings { settings ->
-              settings.pluginManagement.repositories {
-                  maven { url = java.net.URI.create(mirror) }
-                  gradlePluginPortal()
-              }
-          }
-          GRADLE
-          # إزالة المسافات البادئة الناتجة عن YAML
-          sed -i 's/^          //' "$HOME/.gradle/init.d/mirror.gradle"
-          cat >> "$HOME/.gradle/gradle.properties" <<'PROPS'
-          systemProp.org.gradle.internal.http.connectionTimeout=120000
-          systemProp.org.gradle.internal.http.socketTimeout=120000
-          systemProp.org.gradle.internal.repository.max.tentatives=8
-          systemProp.org.gradle.internal.repository.initial.backoff=2000
-          PROPS
-          sed -i 's/^          //' "$HOME/.gradle/gradle.properties"
-          cat "$HOME/.gradle/init.d/mirror.gradle"
+FAILURE: Build failed with an exception.
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('.github/workflows/main.yml', '*.zip', 'pubspec.yaml') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
+* Where:
+Build file '/home/runner/work/matpakhy/matpakhy/_project/merged/android/app/build.gradle' line: 5
 
-      # ---------- 3) توليد gradlew والملفات الناقصة فقط (دون استبدال ملفاتنا) ----------
-      - name: Add missing Android scaffolding
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          flutter create --platforms=android --org com.nader --project-name cooking_app "$RUNNER_TEMP/scaffold"
-          mkdir -p android
-          cp -rn "$RUNNER_TEMP/scaffold/android/." android/
-          chmod +x android/gradlew
-          rm -f test/widget_test.dart
+* What went wrong:
+An exception occurred applying plugin request [id: 'dev.flutter.flutter-gradle-plugin']
+> Failed to apply plugin 'dev.flutter.flutter-gradle-plugin'.
+   > Error: Your project's Gradle version (8.11.1) is lower than Flutter's minimum supported version of 9.3.1. Please upgrade your Gradle version. 
+     Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
 
-      - name: Install dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter pub get
+     Potential fix: Your project's gradle version is typically defined in the gradle wrapper file. By default, this can be found at /home/runner/work/matpakhy/matpakhy/_project/merged/android/gradle/wrapper/gradle-wrapper.properties. 
+     For more information, see https://docs.gradle.org/current/userguide/gradle_wrapper.html.
 
-      - name: Generate launcher icons
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: dart run flutter_launcher_icons
 
-      - name: Prepare signing keystore
-        working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
-            SP="$KEYSTORE_PASSWORD"; KA="$KEY_ALIAS"; KP="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
-          else
-            echo "::warning::No KEYSTORE_BASE64 secret. Generating a temporary keystore (not for Google Play updates)."
-            SP="matbakhy123456"; KA="upload"; KP="matbakhy123456"
-            keytool -genkeypair -v -keystore android/app/upload-keystore.jks \
-              -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias "$KA" \
-              -storepass "$SP" -keypass "$KP" -dname "CN=Matbakhy, O=Matbakhy, C=EG"
-          fi
-          {
-            echo "storePassword=$SP"
-            echo "keyPassword=$KP"
-            echo "keyAlias=$KA"
-            echo "storeFile=upload-keystore.jks"
-          } > android/key.properties
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
 
-      # ---------- 4) البناء مع إعادة المحاولة تلقائياً (3 مرات) ----------
-      - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          for i in 1 2 3; do
-            if flutter build apk --release; then exit 0; fi
-            echo "::warning::Attempt $i failed, retrying..."
-            sleep $((i * 40))
-          done
-          exit 1
+BUILD FAILED in 887ms
+Running Gradle task 'assembleRelease'...                         1,042ms
+Gradle task assembleRelease failed with exit code 1
+Warning: Attempt 2 failed, retrying...
+Running Gradle task 'assembleRelease'...                        
+Both build.gradle and build.gradle.kts exist, so
+build.gradle.kts is ignored. This is likely a mistake.
 
-      - name: Build AAB
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          for i in 1 2 3; do
-            if flutter build appbundle --release; then exit 0; fi
-            echo "::warning::Attempt $i failed, retrying..."
-            sleep $((i * 40))
-          done
-          exit 1
+FAILURE: Build failed with an exception.
 
-      - name: Collect outputs
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/dist/matbakhy.apk"
-          cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/dist/matbakhy.aab"
+* Where:
+Build file '/home/runner/work/matpakhy/matpakhy/_project/merged/android/app/build.gradle' line: 5
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: matbakhy-release
-          path: dist/*
+* What went wrong:
+An exception occurred applying plugin request [id: 'dev.flutter.flutter-gradle-plugin']
+> Failed to apply plugin 'dev.flutter.flutter-gradle-plugin'.
+   > Error: Your project's Gradle version (8.11.1) is lower than Flutter's minimum supported version of 9.3.1. Please upgrade your Gradle version. 
+     Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
 
-      - name: Publish GitHub Release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
+     Potential fix: Your project's gradle version is typically defined in the gradle wrapper file. By default, this can be found at /home/runner/work/matpakhy/matpakhy/_project/merged/android/gradle/wrapper/gradle-wrapper.properties. 
+     For more information, see https://docs.gradle.org/current/userguide/gradle_wrapper.html.
+
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 854ms
+Running Gradle task 'assembleRelease'...                         1,024ms
+Gradle task assembleRelease failed with exit code 1
+Warning: Attempt 3 failed, retrying...
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+0s
+0s
+0s
+0s
+1s
+0s
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Community
+Docs
+Contact
+Manage cookies
+Do not share my personal information
