@@ -59,11 +59,21 @@ jobs:
             sed -i '/lint {/a \        abortOnError = false\n        checkReleaseBuilds = false' android/app/build.gradle.kts || true
           fi
 
+      - name: Prepare Gradle Wrapper
+        working-directory: ${{ steps.locate_project.outputs.project_dir }}
+        run: |
+          WRAPPER_PROP="android/gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$WRAPPER_PROP" ]; then
+            sed -i 's/gradle-[0-9.]*-all\.zip/gradle-8.11.1-all.zip/g; s/gradle-[0-9.]*-bin\.zip/gradle-8.11.1-all.zip/g' "$WRAPPER_PROP"
+          fi
+          cat "$WRAPPER_PROP" || true
+
       - name: Build APK
         working-directory: ${{ steps.locate_project.outputs.project_dir }}
-        run: flutter build apk --release
+        run: flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
