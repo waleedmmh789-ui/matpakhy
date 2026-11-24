@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  PROJECT_DIR: . # غيّر النقطة إلى اسم المجلد الفرعي إذا كان المشروع بداخله، مثل: matpakhy
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,14 +36,16 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             /usr/local/lib/android/sdk/ndk
-          key: ${{ runner.os }}-gradle-ndk-${{ hashFiles('**/gradle-wrapper.properties', 'android/app/build.gradle*', '**/pubspec.lock') }}
+          key: ${{ runner.os }}-gradle-ndk-${{ hashFiles('**/gradle-wrapper.properties', '**/build.gradle*', '**/pubspec.lock') }}
           restore-keys: |
             ${{ runner.os }}-gradle-ndk-
 
       - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
         run: flutter pub get
 
       - name: Disable Lint Check (Fix for LintDetectorError)
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           python3 - << 'EOF'
           from pathlib import Path
@@ -72,10 +77,11 @@ jobs:
           EOF
 
       - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: flutter build apk --release -Pandroid.lint.checkReleaseBuilds=false
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
