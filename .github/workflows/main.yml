@@ -73,6 +73,7 @@ jobs:
           gradle.beforeSettings { settings ->
               settings.pluginManagement.repositories {
                   maven { url = java.net.URI.create(mirror) }
+                  gradlePluginPortal()
               }
           }
           GRADLE
