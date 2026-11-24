@@ -58,8 +58,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # إصدار Flutter مثبّت (هو الذي ظهر في سجل البناء: stable-3.50.1).
+      # لا تغيّره إلا عندما تريد الترقية عمداً، ثم جرّب البناء.
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.50.1'
           channel: stable
           cache: true
 
