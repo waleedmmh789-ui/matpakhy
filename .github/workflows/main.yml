@@ -75,14 +75,6 @@ jobs:
                   maven { url = java.net.URI.create(mirror) }
               }
           }
-          gradle.allprojects {
-              buildscript.repositories {
-                  maven { url = java.net.URI.create(mirror) }
-              }
-              repositories {
-                  maven { url = java.net.URI.create(mirror) }
-              }
-          }
           GRADLE
           # إزالة المسافات البادئة الناتجة عن YAML
           sed -i 's/^          //' "$HOME/.gradle/init.d/mirror.gradle"
