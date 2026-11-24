@@ -1,9 +1,13 @@
-name: Build Flutter App
+
+name: Extract and Build Flutter APK + AAB
 
 on:
   push:
-    branches: [ "**" ]
+    branches: ["**"]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,65 +20,101 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
+          distribution: temurin
           java-version: "17"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: "stable"
+          channel: stable
           cache: true
 
-      - name: Extract zip archives if present
+      - name: Extract ZIP files recursively
+        id: locate
+        shell: bash
         run: |
-          find . -maxdepth 3 -type f -name "*.zip" | while read -r zipfile; do
-            target_dir="${zipfile%.zip}"
-            mkdir -p "$target_dir"
-            unzip -q -o "$zipfile" -d "$target_dir" || true
-          done
+          python3 <<'PY'
+          import os, shutil, zipfile
+          from pathlib import Path
 
-      - name: Locate Flutter project root
-        id: locate_project
-        run: |
-          PUBSPEC_PATH=$(find . -maxdepth 5 -name "pubspec.yaml" -not -path "*/.*" | head -n 1)
-          if [ -z "$PUBSPEC_PATH" ]; then
-            echo "❌ لم يتم العثور على ملف pubspec.yaml داخل المشروع!"
-            exit 1
-          fi
-          PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
-          echo "Found Flutter project at: $PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          repo = Path.cwd()
+          output = repo / ".ci-unpacked"
+
+          if output.exists():
+              shutil.rmtree(output)
+          output.mkdir()
+
+          queue = [
+              p for p in repo.rglob("*.zip")
+              if output not in p.parents and ".git" not in p.parts
+          ]
+
+          seen = set()
+          index = 0
+
+          while queue:
+              archive = queue.pop(0)
+              if str(archive.resolve()) in seen:
+                  continue
+              seen.add(str(archive.resolve()))
+
+              index += 1
+              dest = output / f"archive_{index}"
+              dest.mkdir()
+
+              with zipfile.ZipFile(archive) as z:
+                  for item in z.infolist():
+                      target = (dest / item.filename).resolve()
+                      if not target.is_relative_to(dest.resolve()):
+                          raise RuntimeError("Unsafe ZIP path")
+                  z.extractall(dest)
+
+              queue.extend(dest.rglob("*.zip"))
+
+          candidates = []
+          for base in (repo, output):
+              for p in base.rglob("pubspec.yaml"):
+                  if ".git" in p.parts:
+                      continue
+                  root = p.parent
+                  if ((root / "lib/main.dart").is_file()
+                      and (root / "android").is_dir()):
+                      candidates.append(root.resolve())
+
+          candidates = sorted(set(candidates),
+                              key=lambda p: (len(p.parts), str(p)))
+
+          if not candidates:
+              raise SystemExit("Flutter project not found!")
+
+          project = candidates[0]
+          print("Flutter project:", project)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"project_dir={project}\n")
+          PY
 
       - name: Install dependencies
-        working-directory: ${{ steps.locate_project.outputs.project_dir }}
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter pub get
 
-      - name: Disable Lint Check (Fix for LintDetectorError)
-        working-directory: ${{ steps.locate_project.outputs.project_dir }}
-        run: |
-          if [ -f android/app/build.gradle ]; then
-            sed -i '/lint {/a \        abortOnError false\n        checkReleaseBuilds false' android/app/build.gradle || true
-          fi
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i '/lint {/a \        abortOnError = false\n        checkReleaseBuilds = false' android/app/build.gradle.kts || true
-          fi
-
-      - name: Prepare Gradle Wrapper
-        working-directory: ${{ steps.locate_project.outputs.project_dir }}
-        run: |
-          WRAPPER_PROP="android/gradle/wrapper/gradle-wrapper.properties"
-          if [ -f "$WRAPPER_PROP" ]; then
-            sed -i 's/gradle-[0-9.]*-all\.zip/gradle-8.11.1-all.zip/g; s/gradle-[0-9.]*-bin\.zip/gradle-8.11.1-all.zip/g' "$WRAPPER_PROP"
-          fi
-          cat "$WRAPPER_PROP" || true
+      - name: Generate app icons
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: dart run flutter_launcher_icons
 
       - name: Build APK
-        working-directory: ${{ steps.locate_project.outputs.project_dir }}
-        run: flutter build apk --release --android-skip-build-dependency-validation
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: flutter build apk --release
 
-      - name: Upload APK
-        if: success()
+      - name: Build AAB
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: flutter build appbundle --release
+
+      - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
-          path: ${{ steps.locate_project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
+          name: matbakhy-android-release
+          path: |
+            ${{ steps.locate.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
+            ${{ steps.locate.outputs.project_dir }}/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
