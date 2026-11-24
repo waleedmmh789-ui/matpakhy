@@ -133,6 +133,24 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: flutter pub get
 
+      # ---------- إصلاح توافق إضافات pub مع Gradle 9 ----------
+      # بعض الإضافات (مثل google_mobile_ads 6.0.0) تستخدم configurations.all كخاصية،
+      # وقد حُذفت في Gradle 9. نستبدلها بـ configurations (نفس النتيجة).
+      - name: Patch plugins for Gradle 9
+        shell: bash
+        run: |
+          PC="${PUB_CACHE:-$HOME/.pub-cache}"
+          echo "Pub cache: $PC"
+          find "$PC/hosted" -path '*/android/build.gradle' 2>/dev/null | while read -r f; do
+            if grep -qP '\bconfigurations\.all(?!\s*[\{\(])' "$f"; then
+              echo "Patching $f"
+              grep -nP '\bconfigurations\.all(?!\s*[\{\(])' "$f" || true
+              perl -pi -e 's/\bconfigurations\.all(?!\s*[\{\(])/configurations/g' "$f"
+            fi
+          done
+          G="$(find "$PC/hosted" -path '*google_mobile_ads-*/android/build.gradle' | head -n1 || true)"
+          if [ -n "$G" ]; then echo "--- $G (lines 50-65) ---"; sed -n 50,65p "$G"; fi
+
       - name: Generate launcher icons
         working-directory: ${{ env.PROJECT_DIR }}
         run: dart run flutter_launcher_icons
