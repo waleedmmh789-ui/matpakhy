@@ -2,12 +2,8 @@ name: Build Flutter App
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  PROJECT_DIR: . # غيّر النقطة إلى اسم المجلد الفرعي إذا كان المشروع بداخله، مثل: matpakhy
+    branches: [ "**" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,68 +16,55 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: "stable"
           cache: true
 
-      - name: Cache Gradle and NDK
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            /usr/local/lib/android/sdk/ndk
-          key: ${{ runner.os }}-gradle-ndk-${{ hashFiles('**/gradle-wrapper.properties', '**/build.gradle*', '**/pubspec.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-ndk-
+      - name: Extract zip archives if present
+        run: |
+          find . -maxdepth 3 -type f -name "*.zip" | while read -r zipfile; do
+            target_dir="${zipfile%.zip}"
+            mkdir -p "$target_dir"
+            unzip -q -o "$zipfile" -d "$target_dir" || true
+          done
+
+      - name: Locate Flutter project root
+        id: locate_project
+        run: |
+          PUBSPEC_PATH=$(find . -maxdepth 5 -name "pubspec.yaml" -not -path "*/.*" | head -n 1)
+          if [ -z "$PUBSPEC_PATH" ]; then
+            echo "❌ لم يتم العثور على ملف pubspec.yaml داخل المشروع!"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
+          echo "Found Flutter project at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ steps.locate_project.outputs.project_dir }}
         run: flutter pub get
 
       - name: Disable Lint Check (Fix for LintDetectorError)
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ steps.locate_project.outputs.project_dir }}
         run: |
-          python3 - << 'EOF'
-          from pathlib import Path
-          import re
-
-          for target in [Path("android/app/build.gradle.kts"), Path("android/app/build.gradle")]:
-              if target.exists():
-                  content = target.read_text(encoding="utf-8")
-                  if target.suffix == ".kts":
-                      lint_block = """
-          lint {
-              checkReleaseBuilds = false
-              abortOnError = false
-          }
-          """
-                      if "lint {" not in content:
-                          content, _ = re.subn(r"(android\s*\{)", r"\1" + lint_block, content, count=1)
-                  else:
-                      lint_block = """
-          lintOptions {
-              checkReleaseBuilds false
-              abortOnError false
-          }
-          """
-                      if "lintOptions {" not in content:
-                          content, _ = re.subn(r"(android\s*\{)", r"\1" + lint_block, content, count=1)
-                  target.write_text(content, encoding="utf-8")
-                  print(f"Updated {target}")
-          EOF
+          if [ -f android/app/build.gradle ]; then
+            sed -i '/lint {/a \        abortOnError false\n        checkReleaseBuilds false' android/app/build.gradle || true
+          fi
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i '/lint {/a \        abortOnError = false\n        checkReleaseBuilds = false' android/app/build.gradle.kts || true
+          fi
 
       - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter build apk --release -Pandroid.lint.checkReleaseBuilds=false
+        working-directory: ${{ steps.locate_project.outputs.project_dir }}
+        run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          name: app-release-apk
+          path: ${{ steps.locate_project.outputs.project_dir }}/build/app/outputs/flutter-apk/app-release.apk
