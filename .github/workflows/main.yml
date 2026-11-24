@@ -78,6 +78,11 @@ jobs:
           }
           // رفع compileSdk إلى 36 لكل الإضافات (webview_flutter_android تشترط 36 أو أعلى)
           gradle.allprojects { p ->
+              // تعطيل lintVital في بناء release: يتعطل (NoSuchMethodError) داخل أداة lint نفسها
+              // بسبب إضافات image_picker و in_app_purchase، ولا يؤثر على ملف APK/AAB الناتج.
+              p.tasks.configureEach { t ->
+                  if (t.name.startsWith('lintVital')) { t.enabled = false }
+              }
               p.afterEvaluate {
                   def ext = p.extensions.findByName('android')
                   if (ext != null) {
