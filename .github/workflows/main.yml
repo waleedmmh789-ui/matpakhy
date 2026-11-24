@@ -1,0 +1,93 @@
+name: Build APK and AAB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      # فك الضغط: يدور على أي ملف zip في الريبو ويفكه في مجلد app
+      - name: Unzip project
+        working-directory: .
+        run: |
+          mkdir -p app
+          ZIP=$(ls *.zip 2>/dev/null | head -n1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Unzipping $ZIP"
+            unzip -q -o "$ZIP" -d _unz
+            PUBSPEC=$(find _unz -name pubspec.yaml | head -n1)
+            DIR=$(dirname "$PUBSPEC")
+            cp -a "$DIR"/. app/
+          else
+            echo "No zip found, using repo root"
+            find . -maxdepth 1 -mindepth 1 ! -name app ! -name .git -exec cp -a {} app/ \;
+          fi
+          ls -la app
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate missing Android files
+        run: |
+          flutter create --platforms=android --org com.matbakhy --project-name cooking_app .
+          rm -f test/widget_test.dart
+
+      - run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: Prepare signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+            SP="$KEYSTORE_PASSWORD"; KA="$KEY_ALIAS"; KP="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::No keystore secrets, generating a temporary one"
+            SP="matbakhy123456"; KA="upload"; KP="matbakhy123456"
+            keytool -genkeypair -v -keystore android/app/upload-keystore.jks \
+              -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias "$KA" \
+              -storepass "$SP" -keypass "$KP" -dname "CN=Matbakhy, O=Matbakhy, C=EG"
+          fi
+          {
+            echo "storePassword=$SP"
+            echo "keyPassword=$KP"
+            echo "keyAlias=$KA"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Build AAB
+        run: flutter build appbundle --release
+
+      - name: Collect outputs
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/matbakhy.apk
+          cp build/app/outputs/bundle/release/app-release.aab dist/matbakhy.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matbakhy-release
+          path: app/dist/*
