@@ -38,7 +38,19 @@ jobs:
             rm -rf "$GITHUB_WORKSPACE/_project"
             mkdir -p "$GITHUB_WORKSPACE/_project"
             unzip -q -o "$ZIP" -d "$GITHUB_WORKSPACE/_project"
-            PUB="$(find "$GITHUB_WORKSPACE/_project" -maxdepth 3 -name pubspec.yaml -not -path '*/.*' | head -n1)"
+            find_pub() { find "$GITHUB_WORKSPACE/_project" -maxdepth 4 -name pubspec.yaml -not -path '*/.*' | head -n1; }
+            PUB="$(find_pub || true)"
+            if [ -z "$PUB" ]; then
+              # أحياناً يكون المشروع داخل zip آخر (zip داخل zip): نفكّه تلقائياً
+              n=0
+              while IFS= read -r Z; do
+                n=$((n+1))
+                echo "Found nested zip: $Z"
+                mkdir -p "$GITHUB_WORKSPACE/_project/_nested_$n"
+                unzip -q -o "$Z" -d "$GITHUB_WORKSPACE/_project/_nested_$n" || true
+              done < <(find "$GITHUB_WORKSPACE/_project" -maxdepth 3 -name '*.zip')
+              PUB="$(find_pub || true)"
+            fi
             if [ -z "$PUB" ]; then
               echo "::error::لا يوجد pubspec.yaml داخل $ZIP"
               exit 1
