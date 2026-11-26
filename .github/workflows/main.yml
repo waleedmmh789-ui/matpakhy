@@ -172,21 +172,81 @@ jobs:
 
       - name: Prepare signing keystore
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
-            SP="$KEYSTORE_PASSWORD"; KA="$KEY_ALIAS"; KP="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+          set -u
+          KS=android/app/upload-keystore.jks
+          USE_TEMP=1
+          SP=""; KA=""; KP=""
+
+          # يتحقق من الـ keystore الحقيقي (الملف + كلمة المرور + الاسم المستعار + كلمة مرور المفتاح)
+          # قبل أن يبدأ Gradle، حتى لا ينهار البناء بخطأ "Failed to read key".
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KS" 2>/dev/null || true
+            SP="${KEYSTORE_PASSWORD:-}"
+            if [ ! -s "$KS" ]; then
+              echo "::warning::KEYSTORE_BASE64 secret is empty or not valid base64."
+            elif ! keytool -list -keystore "$KS" -storepass "$SP" > "$RUNNER_TEMP/ks_list.txt" 2>&1; then
+              echo "::warning::Cannot open the keystore: KEYSTORE_PASSWORD is wrong, or KEYSTORE_BASE64 is not a valid keystore file."
+            else
+              mapfile -t ALIASES < <(grep -E 'PrivateKeyEntry' "$RUNNER_TEMP/ks_list.txt" | sed -E 's/^([^,]+),.*/\1/')
+              echo "Private-key entries in keystore: ${#ALIASES[@]}"
+              KA="${KEY_ALIAS:-}"
+              FOUND=0
+              for a in "${ALIASES[@]}"; do
+                if [ "${a,,}" = "${KA,,}" ]; then KA="$a"; FOUND=1; fi
+              done
+              if [ "$FOUND" -eq 0 ]; then
+                if [ "${#ALIASES[@]}" -eq 1 ]; then
+                  KA="${ALIASES[0]}"
+                  echo "::warning::KEY_ALIAS secret does not match; using the only alias found in the keystore."
+                else
+                  echo "::warning::KEY_ALIAS secret does not match any alias in the keystore."
+                  KA=""
+                fi
+              fi
+              if [ -n "$KA" ]; then
+                # في ملفات PKCS12 لا يمكن أن تختلف كلمة مرور المفتاح عن كلمة مرور الـ keystore
+                # (وهذا سبب شائع لخطأ "Failed to read key")، فنستخدم كلمة مرور الـ keystore.
+                if grep -q 'Keystore type: PKCS12' "$RUNNER_TEMP/ks_list.txt"; then
+                  CANDS=("$SP")
+                  [ -n "${KEY_PASSWORD:-}" ] && [ "$KEY_PASSWORD" != "$SP" ] && \
+                    echo "::warning::Keystore is PKCS12: ignoring KEY_PASSWORD and using KEYSTORE_PASSWORD (they must be equal)."
+                else
+                  CANDS=("${KEY_PASSWORD:-}" "$SP")
+                fi
+                for CAND in "${CANDS[@]}"; do
+                  [ -z "$CAND" ] && continue
+                  rm -f "$RUNNER_TEMP/verify.p12"
+                  if keytool -importkeystore -noprompt \
+                      -srckeystore "$KS" -srcstorepass "$SP" -srcalias "$KA" -srckeypass "$CAND" \
+                      -destkeystore "$RUNNER_TEMP/verify.p12" -deststoretype PKCS12 \
+                      -deststorepass verifypass -destkeypass verifypass > /dev/null 2>&1; then
+                    KP="$CAND"; USE_TEMP=0; break
+                  fi
+                done
+                rm -f "$RUNNER_TEMP/verify.p12"
+                [ "$USE_TEMP" -eq 1 ] && echo "::warning::KEY_PASSWORD is wrong for the alias (also tried KEYSTORE_PASSWORD)."
+              fi
+            fi
           else
-            echo "::warning::No KEYSTORE_BASE64 secret. Generating a temporary keystore (not for Google Play updates)."
+            echo "::warning::No KEYSTORE_BASE64 secret."
+          fi
+
+          if [ "$USE_TEMP" -eq 1 ]; then
+            echo "::warning::Using a TEMPORARY keystore so the build can finish. These APK/AAB are NOT signed with your upload key and cannot update an app on Google Play. Fix the secrets (KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) and re-run."
+            rm -f "$KS"
             SP="matbakhy123456"; KA="upload"; KP="matbakhy123456"
-            keytool -genkeypair -v -keystore android/app/upload-keystore.jks \
+            keytool -genkeypair -keystore "$KS" \
               -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias "$KA" \
               -storepass "$SP" -keypass "$KP" -dname "CN=Matbakhy, O=Matbakhy, C=EG"
+          else
+            echo "Signing with the real upload keystore."
           fi
           {
             echo "storePassword=$SP"
@@ -195,13 +255,34 @@ jobs:
             echo "storeFile=upload-keystore.jks"
           } > android/key.properties
 
+      # ---------- رقم الإصدار يتغير تلقائياً مع كل تشغيل ----------
+      # versionCode = رقم التشغيل (GITHUB_RUN_NUMBER) + BUILD_NUMBER_OFFSET
+      # versionName = major.minor من pubspec.yaml + رقم التشغيل  (مثال: 1.0.12)
+      # لو رفعت قبل كده على Google Play نسخة بـ versionCode أكبر، ارفع BUILD_NUMBER_OFFSET بالفرق.
+      - name: Compute version (changes every run)
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        env:
+          BUILD_NUMBER_OFFSET: "0"
+        run: |
+          set -euo pipefail
+          BASE="$(grep -m1 -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//; s/\+.*$//' | tr -d '[:space:]')"
+          MAJOR_MINOR="$(echo "$BASE" | cut -d. -f1,2)"
+          [ -z "$MAJOR_MINOR" ] && MAJOR_MINOR="1.0"
+          CODE=$(( GITHUB_RUN_NUMBER + BUILD_NUMBER_OFFSET ))
+          NAME="$MAJOR_MINOR.$GITHUB_RUN_NUMBER"
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Version: $NAME (versionCode $CODE)"
+          echo "### Version $NAME (versionCode $CODE)" >> "$GITHUB_STEP_SUMMARY"
+
       # ---------- 4) البناء مع إعادة المحاولة تلقائياً (3 مرات) ----------
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           for i in 1 2 3; do
-            if flutter build apk --release; then exit 0; fi
+            if flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"; then exit 0; fi
             echo "::warning::Attempt $i failed, retrying..."
             sleep $((i * 40))
           done
@@ -212,7 +293,7 @@ jobs:
         shell: bash
         run: |
           for i in 1 2 3; do
-            if flutter build appbundle --release; then exit 0; fi
+            if flutter build appbundle --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"; then exit 0; fi
             echo "::warning::Attempt $i failed, retrying..."
             sleep $((i * 40))
           done
